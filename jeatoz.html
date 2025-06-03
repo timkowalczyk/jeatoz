@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JEATOZ Puzzle Game</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            touch-action: manipulation; /* Prevent double tap zoom on mobile */
+        }
+        .game-board {
+            display: grid;
+            grid-template-columns: repeat(6, minmax(0, 1fr));
+            gap: 4px;
+            border: 2px solid #374151; /* gray-700 */
+            padding: 8px;
+            border-radius: 8px;
+            background-color: #f3f4f6; /* gray-100 */
+            max-width: 400px;
+            width: 90vw;
+            aspect-ratio: 1 / 1;
+        }
+        .cell {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background-color: #e5e7eb; /* gray-200 */
+            border: 1px solid #d1d5db; /* gray-300 */
+            font-size: clamp(1rem, 4vw, 1.5rem);
+            font-weight: bold;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background-color 0.2s;
+            aspect-ratio: 1 / 1;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .cell:hover:not(.disabled) {
+            background-color: #93c5fd; /* blue-300 */
+        }
+        .cell.pre-filled { /* Unvisited pre-filled JEATOZ letters */
+            background-color: #fed7aa; /* orange-200 */
+            color: #c2410c; /* orange-700 */
+        }
+        .cell.player-path { /* Cells part of the player's current path */
+            background-color: #86efac; /* green-300 */
+            color: #15803d; /* green-700 */
+        }
+        .cell.last-player-move { /* The most recent move */
+            background-color: #67e8f9; /* cyan-300 */
+            outline: 2px solid #0e7490; /* cyan-600 */
+        }
+        .info-panel {
+            background-color: #e0f2fe; /* sky-100 */
+            border: 1px solid #bae6fd; /* sky-200 */
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 16px;
+            text-align: center;
+        }
+        .info-panel p {
+            margin: 4px 0;
+            font-size: clamp(0.9rem, 3vw, 1.1rem);
+        }
+        .message-box {
+            min-height: 50px;
+            padding: 10px;
+            border-radius: 8px;
+            margin-top: 16px;
+            font-weight: bold;
+            text-align: center;
+            font-size: clamp(0.9rem, 3vw, 1.1rem);
+        }
+        .message-box.success {
+            background-color: #d1fae5; /* green-100 */
+            color: #065f46; /* green-800 */
+            border: 1px solid #6ee7b7; /* green-300 */
+        }
+        .message-box.error {
+            background-color: #fee2e2; /* red-100 */
+            color: #991b1b; /* red-800 */
+            border: 1px solid #fca5a5; /* red-300 */
+        }
+        .button-container {
+            display: flex;
+            justify-content: center;
+            gap: 10px; /* Space between buttons */
+            margin-top: 20px;
+        }
+        .game-button {
+            color: white;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background-color 0.2s;
+            font-size: clamp(0.9rem, 3vw, 1.1rem);
+        }
+        .new-game-button { /* Changed from reset-button for clarity, but kept similar style base */
+            background-color: #fb923c; /* orange-400 */
+        }
+        .new-game-button:hover {
+            background-color: #f97316; /* orange-500 */
+        }
+        .undo-button {
+            background-color: #60a5fa; /* blue-400 */
+        }
+        .undo-button:hover {
+            background-color: #3b82f6; /* blue-500 */
+        }
+        .container {
+            width: 100%;
+            max-width: 500px;
+            margin: 0 auto;
+            padding: 16px;
+        }
+    </style>
+</head>
+<body class="bg-slate-50 flex flex-col items-center justify-center min-h-screen p-4">
+
+    <div class="container">
+        <h1 class="text-3xl font-bold text-center text-slate-700 mb-6">JEATOZ Puzzle Game</h1>
+
+        <div id="infoPanel" class="info-panel">
+            <p>Next Letter: <span id="nextLetter" class="font-semibold"></span></p>
+            <p>JEATOZ Target: <span id="jeatozTarget" class="font-semibold"></span></p>
+            <p>Path: <span id="currentPath" class="font-semibold text-sm"></span></p>
+        </div>
+
+        <div id="gameBoard" class="game-board">
+            </div>
+
+        <div id="messageBox" class="message-box">
+            Welcome! Click 'New Game' to start.
+        </div>
+
+        <div class="button-container">
+            <button id="undoButton" class="game-button undo-button">Undo Last Move</button>
+            <button id="newGameButton" class="game-button new-game-button">New Game</button>
+        </div>
+    </div>
+
+    <script>
+        const BOARD_SIZE = 6;
+        const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        const JEATOZ_SEQUENCE = ['E', 'J', 'O', 'T', 'Z'];
+        const PATH_LENGTH = 26; // ALPHABET.length
+
+        // These will be populated by generateNewPathAndBoard
+        let currentSolutionPathCoords; // Full path of {r,c} objects
+        let currentPreFilledLetters;   // Map: {'A':{r,c}, 'E':{r,c}, ...}
+
+        let playerBoardState; // 2D array to store current letters on board
+        let playerPath;       // Array of {letter, r, c}
+        let currentJeatozIndex; // Index for JEATOZ_SEQUENCE
+
+        const gameBoard = document.getElementById('gameBoard');
+        const nextLetterEl = document.getElementById('nextLetter');
+        const jeatozTargetEl = document.getElementById('jeatozTarget');
+        const currentPathEl = document.getElementById('currentPath');
+        const messageBox = document.getElementById('messageBox');
+        const newGameButton = document.getElementById('newGameButton');
+        const undoButton = document.getElementById('undoButton');
+
+        /**
+         * Generates a new random path for the game.
+         * Tries to find a non-intersecting path of PATH_LENGTH cells.
+         * Uses a backtracking-like approach with randomized neighbor selection.
+         */
+        function generateNewPathAndBoard() {
+            let pathFound = false;
+            let generatedPathAttempt;
+            const MAX_TOTAL_ATTEMPTS = 10; // Try generating a full path a few times if one attempt fails
+            let totalAttempts = 0;
+
+            while(!pathFound && totalAttempts < MAX_TOTAL_ATTEMPTS) {
+                totalAttempts++;
+                generatedPathAttempt = [];
+                const visitedCells = Array(BOARD_SIZE).fill(null).map(() => Array(BOARD_SIZE).fill(false));
+                
+                // 1. Pick random start for 'A'
+                let startR = Math.floor(Math.random() * BOARD_SIZE);
+                let startC = Math.floor(Math.random() * BOARD_SIZE);
+                
+                // Recursive function to build the path
+                function buildPath(r, c) {
+                    if (generatedPathAttempt.length === PATH_LENGTH) {
+                        return true; // Path complete
+                    }
+
+                    generatedPathAttempt.push({ r: r, c: c });
+                    visitedCells[r][c] = true;
+
+                    const directions = [[-1, 0], [1, 0], [0, -1], [0, 1]]; // Up, Down, Left, Right
+                    // Shuffle directions for randomness
+                    for (let i = directions.length - 1; i > 0; i--) {
+                        const j = Math.floor(Math.random() * (i + 1));
+                        [directions[i], directions[j]] = [directions[j], directions[i]];
+                    }
+
+                    for (const [dr, dc] of directions) {
+                        const nr = r + dr;
+                        const nc = c + dc;
+
+                        if (nr >= 0 && nr < BOARD_SIZE && nc >= 0 && nc < BOARD_SIZE && !visitedCells[nr][nc]) {
+                            if (buildPath(nr, nc)) {
+                                return true; // Path found
+                            }
+                        }
+                    }
+
+                    // Backtrack
+                    visitedCells[r][c] = false;
+                    generatedPathAttempt.pop();
+                    return false; // No path from this cell
+                }
+
+                if (buildPath(startR, startC) && generatedPathAttempt.length === PATH_LENGTH) {
+                    pathFound = true;
+                }
+            }
+
+
+            if (!pathFound) {
+                console.error("Failed to generate a valid path after MAX_TOTAL_ATTEMPTS.");
+                displayMessage("Could not generate a new puzzle. Please try 'New Game' again or refresh.", "error");
+                currentSolutionPathCoords = null; 
+                currentPreFilledLetters = null;
+                return false; 
+            }
+
+            currentSolutionPathCoords = generatedPathAttempt;
+            
+            currentPreFilledLetters = {
+                'A': currentSolutionPathCoords[ALPHABET.indexOf('A')],
+                'E': currentSolutionPathCoords[ALPHABET.indexOf('E')],
+                'J': currentSolutionPathCoords[ALPHABET.indexOf('J')],
+                'O': currentSolutionPathCoords[ALPHABET.indexOf('O')],
+                'T': currentSolutionPathCoords[ALPHABET.indexOf('T')],
+                'Z': currentSolutionPathCoords[ALPHABET.indexOf('Z')],
+            };
+            return true; 
+        }
+
+        /**
+         * Initializes the game state and UI for a new game.
+         * Called by the "New Game" button.
+         */
+        function setupNewGame() {
+            const pathGeneratedSuccessfully = generateNewPathAndBoard();
+            if (!pathGeneratedSuccessfully) {
+                // Message already displayed by generateNewPathAndBoard on failure
+                renderBoard(); // Render empty board or error state
+                updateInfo();
+                return; 
+            }
+
+            playerBoardState = Array(BOARD_SIZE).fill(null).map(() => Array(BOARD_SIZE).fill(null));
+            playerPath = [];
+            currentJeatozIndex = 0;
+
+            // Place initial pre-filled letters from the newly generated path
+            for (const letter in currentPreFilledLetters) {
+                const pos = currentPreFilledLetters[letter];
+                playerBoardState[pos.r][pos.c] = letter;
+            }
+
+            // Start with 'A'
+            const startPos = currentPreFilledLetters['A'];
+            playerPath.push({ letter: 'A', r: startPos.r, c: startPos.c });
+
+            renderBoard();
+            updateInfo();
+            displayMessage("New game started! Find the path from A to Z.", "success");
+        }
+
+        function renderBoard() {
+            gameBoard.innerHTML = '';
+            if (!currentPreFilledLetters || !currentSolutionPathCoords) { 
+                // This handles the state before "New Game" is pressed or if path gen failed
+                for (let r = 0; r < BOARD_SIZE; r++) {
+                    for (let c = 0; c < BOARD_SIZE; c++) {
+                        const cell = document.createElement('div');
+                        cell.classList.add('cell');
+                        gameBoard.appendChild(cell);
+                    }
+                }
+                if (!playerPath || playerPath.length === 0) { // Only show if game hasn't started
+                     displayMessage("Click 'New Game' to begin.", "success");
+                }
+                return;
+            }
+
+            for (let r = 0; r < BOARD_SIZE; r++) {
+                for (let c = 0; c < BOARD_SIZE; c++) {
+                    const cell = document.createElement('div');
+                    cell.classList.add('cell');
+                    cell.dataset.r = r;
+                    cell.dataset.c = c;
+
+                    const letterOnBoard = playerBoardState[r][c];
+                    
+                    if (letterOnBoard) {
+                        cell.textContent = letterOnBoard;
+                        const isPlayerPathCell = playerPath.some(p => p.r === r && p.c === c && p.letter === letterOnBoard);
+                        
+                        if (isPlayerPathCell) {
+                            cell.classList.add('player-path');
+                        } else if (currentPreFilledLetters[letterOnBoard] && currentPreFilledLetters[letterOnBoard].r === r && currentPreFilledLetters[letterOnBoard].c === c) {
+                            cell.classList.add('pre-filled');
+                        }
+                    }
+
+                    const lastMove = playerPath[playerPath.length - 1];
+                    if (lastMove && lastMove.r === r && lastMove.c === c) {
+                        cell.classList.add('last-player-move');
+                    }
+                    
+                    cell.addEventListener('click', () => handleCellClick(r, c));
+                    cell.addEventListener('touchend', (e) => { 
+                        e.preventDefault();
+                        handleCellClick(r,c);
+                    });
+                    gameBoard.appendChild(cell);
+                }
+            }
+        }
+
+        function handleCellClick(r, c) {
+            if (!playerPath || playerPath.length === 0 || !currentSolutionPathCoords) {
+                 displayMessage("Please start a 'New Game' first.", "error");
+                 return;
+            }
+            if (playerPath.length >= PATH_LENGTH) {
+                displayMessage("Puzzle already solved! Start a 'New Game' to play again.", "success");
+                return;
+            }
+
+            const nextAlphabetIndex = playerPath.length;
+            const expectedLetter = ALPHABET[nextAlphabetIndex];
+            const lastPlayerMove = playerPath[playerPath.length - 1];
+
+            if (Math.abs(r - lastPlayerMove.r) + Math.abs(c - lastPlayerMove.c) !== 1) {
+                displayMessage(`Invalid move. '${expectedLetter}' must be placed adjacent (not diagonally) to '${lastPlayerMove.letter}'.`, "error");
+                return;
+            }
+
+            const isTargetJeatozKeyLetter = Object.keys(currentPreFilledLetters).includes(expectedLetter);
+
+            if (isTargetJeatozKeyLetter) {
+                const targetPos = currentPreFilledLetters[expectedLetter];
+                if (r !== targetPos.r || c !== targetPos.c) {
+                    displayMessage(`To place '${expectedLetter}', you must click on its pre-filled location.`, "error");
+                    return;
+                }
+                if (expectedLetter !== 'A' && expectedLetter !== JEATOZ_SEQUENCE[currentJeatozIndex]) {
+                     displayMessage(`You found '${expectedLetter}', but you need to find '${JEATOZ_SEQUENCE[currentJeatozIndex]}' first in the JEATOZ sequence.`, "error");
+                     return;
+                }
+                if (expectedLetter !== 'A' && expectedLetter === JEATOZ_SEQUENCE[currentJeatozIndex]) {
+                    currentJeatozIndex++;
+                }
+            } else {
+                if (playerBoardState[r][c] !== null) {
+                    displayMessage(`Cell (${r},${c}) is already occupied by '${playerBoardState[r][c]}'. Cannot place '${expectedLetter}' here.`, "error");
+                    return;
+                }
+                playerBoardState[r][c] = expectedLetter;
+            }
+
+            playerPath.push({ letter: expectedLetter, r: r, c: c });
+            
+            if (expectedLetter === 'Z') {
+                if (currentJeatozIndex === JEATOZ_SEQUENCE.length) {
+                    displayMessage("Congratulations! You've completed the JEATOZ path!", "success");
+                } else {
+                    // This case should be rare if logic is correct, as Z is the last JEATOZ target.
+                    displayMessage(`'${expectedLetter}' placed, but not all JEATOZ targets were hit in order. Path: ${playerPath.map(p=>p.letter).join('-')}`, "error");
+                }
+            } else {
+                displayMessage(`'${expectedLetter}' placed successfully!`, "success");
+            }
+
+            renderBoard();
+            updateInfo();
+        }
+
+        function handleUndoClick() {
+            if (!playerPath || playerPath.length <= 1) {
+                displayMessage("Cannot undo the starting letter 'A' or no moves to undo.", "error");
+                return;
+            }
+
+            const lastMoveUndone = playerPath.pop();
+            const letterUndone = lastMoveUndone.letter;
+
+            // Only clear the board state if it was a letter like B, C, D, F, G...
+            // (i.e., not one of the *original* pre-filled JEATOZ letters)
+            let wasOriginalPreFilled = false;
+            for (const key in currentPreFilledLetters) { // currentPreFilledLetters should be defined if a game is active
+                if (currentPreFilledLetters[key].r === lastMoveUndone.r && currentPreFilledLetters[key].c === lastMoveUndone.c && key === letterUndone) {
+                    wasOriginalPreFilled = true;
+                    break;
+                }
+            }
+            if (!wasOriginalPreFilled) {
+                 playerBoardState[lastMoveUndone.r][lastMoveUndone.c] = null;
+            }
+
+            // Update JEATOZ sequence index if a JEATOZ letter was undone
+            if (letterUndone !== 'A' && JEATOZ_SEQUENCE.includes(letterUndone)) {
+                const undoneJeatozIndex = JEATOZ_SEQUENCE.indexOf(letterUndone);
+                // Check if the undone letter was the one that *just* advanced currentJeatozIndex
+                if (currentJeatozIndex > 0 && JEATOZ_SEQUENCE[currentJeatozIndex -1] === letterUndone) {
+                     currentJeatozIndex--;
+                }
+            }
+            
+            displayMessage(`Undid move: '${letterUndone}' removed.`, "success");
+            renderBoard();
+            updateInfo();
+        }
+
+        function updateInfo() {
+            if (!playerPath || playerPath.length === 0 || !currentSolutionPathCoords) { // Check currentSolutionPathCoords for active game
+                nextLetterEl.textContent = "-";
+                jeatozTargetEl.textContent = "-";
+                currentPathEl.textContent = "No active game.";
+                return;
+            }
+
+            const nextAlphabetIndex = playerPath.length;
+            if (nextAlphabetIndex >= PATH_LENGTH) {
+                nextLetterEl.textContent = "Done!";
+                jeatozTargetEl.textContent = (currentJeatozIndex === JEATOZ_SEQUENCE.length) ? "Completed!" : (JEATOZ_SEQUENCE[currentJeatozIndex] || "Error");
+            } else {
+                nextLetterEl.textContent = ALPHABET[nextAlphabetIndex];
+                if (currentJeatozIndex < JEATOZ_SEQUENCE.length) {
+                    jeatozTargetEl.textContent = JEATOZ_SEQUENCE[currentJeatozIndex];
+                } else { // All JEATOZ targets hit, but path not complete
+                    jeatozTargetEl.textContent = "Path to Z!";
+                }
+            }
+            currentPathEl.textContent = playerPath.map(p => p.letter).join('-');
+            // Truncate if too long for display
+            if (currentPathEl.textContent.length > 40) {
+                currentPathEl.textContent = "..." + currentPathEl.textContent.slice(-37);
+            }
+        }
+
+        function displayMessage(msg, type) {
+            messageBox.textContent = msg;
+            messageBox.className = 'message-box'; 
+            if (type === "success") {
+                messageBox.classList.add('success');
+            } else if (type === "error") {
+                messageBox.classList.add('error');
+            }
+        }
+        
+        // Event Listeners
+        newGameButton.addEventListener('click', setupNewGame);
+        undoButton.addEventListener('click', handleUndoClick);
+        
+        // Initial state: render an empty board and prompt to start.
+        renderBoard(); 
+        updateInfo(); 
+
+    </script>
+
+</body>
+</html>
